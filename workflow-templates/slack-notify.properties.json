@@ -1,0 +1,13 @@
+{
+  "name": "Slack Notification (Push & PR Events)",
+  "description": "Automatically sends a detailed Slack notification upon push to main/master or when a pull request is opened, closed, or merged. Requires a SLACK_WEBHOOK_URL secret.",
+  "iconName": "actions-slack",
+  "filePatterns": [
+    ".*"
+  ],
+  "categories": [
+    "Notifications",
+    "Deployment",
+    "Communication"
+  ]
+}
