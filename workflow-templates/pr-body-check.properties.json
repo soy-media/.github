@@ -1,0 +1,13 @@
+{
+  "name": "PR Body Check (Soft Enforcement)",
+  "description": "PR 본문에서 Issue 링크, 문제/목표, 변경 내용, 검증, 영향도 요약 항목이 비어있으면 댓글로 보완을 요청합니다. 머지 차단은 하지 않습니다 (soft enforcement).",
+  "iconName": "comment-discussion",
+  "filePatterns": [
+    ".*"
+  ],
+  "categories": [
+    "Code Quality",
+    "Code Review",
+    "Automation"
+  ]
+}
