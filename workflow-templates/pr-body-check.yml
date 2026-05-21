@@ -1,0 +1,138 @@
+name: PR Body Check
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  body-check:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Soft-enforce PR body sections
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.pull_request.body || '';
+            const issues = [];
+
+            // Helper: extract content of a labelled field on a single line
+            // ex) "- 영향도 요약: 해당 없음" → "해당 없음"
+            const oneLine = (label) => {
+              const re = new RegExp(`[-*]\\s*${label}\\s*[:：]\\s*(.*)`, 'i');
+              const m = body.match(re);
+              return m ? m[1].trim() : null;
+            };
+
+            // Helper: check if a section under "## 이름" has any non-placeholder content.
+            // Accepts both bullet lines (- / *) and plain-text paragraphs.
+            const sectionHasContent = (heading) => {
+              const re = new RegExp(`##\\s*${heading}[\\s\\S]*?(?=\\n##\\s|\\n---|$)`);
+              const m = body.match(re);
+              if (!m) return false;
+              const lines = m[0]
+                .replace(/<!--[\s\S]*?-->/g, '')
+                .split('\n')
+                .slice(1) // drop heading
+                .map(l => l.trim())
+                .filter(Boolean);
+              return lines.some(line => {
+                // Strip bullet/checkbox prefixes if present
+                const value = line
+                  .replace(/^[-*]\s+/, '')
+                  .replace(/^\[\s\]\s*/, '')
+                  .trim();
+                if (!value) return false;
+                if (value === '-' || value === '없음') return false;
+                // Label-only placeholder like "요약:" or "동작 변화 / 기대 동작:"
+                if (/^[^\n:]+:\s*$/.test(value)) return false;
+                return true;
+              });
+            };
+
+            // 1. Issue link present, OR `Issue:` line explicitly states 없음(사유).
+            const hasIssueLink = /(closes?|fixes?|resolves?)\s+([\w./-]+)?#\d+/i.test(body);
+            const issueLine = oneLine('Issue');
+            const hasNoIssueReason = !!issueLine && /없음\s*\(.+\)/.test(issueLine);
+            if (!hasIssueLink && !hasNoIssueReason) {
+              issues.push('관련 Issue 링크가 없습니다. `Issue: Closes #N` 형식으로 적거나, 관련 이슈가 없다면 `Issue: 없음(사유)` 로 적어주세요.');
+            }
+
+            // 2. 문제 / 목표 한 줄
+            const problem = oneLine('문제\\s*/\\s*목표');
+            if (!problem) {
+              issues.push('`문제 / 목표` 가 비어 있습니다. 이 PR 이 해결하려는 문제 또는 목표를 한 줄로 적어주세요.');
+            }
+
+            // 3. 동작 변화 / 기대 동작
+            if (!sectionHasContent('변경 내용')) {
+              issues.push('`변경 내용` (요약 / 동작 변화 / 상세) 이 비어 있습니다. 사용자나 시스템이 어떻게 달라져야 하는지 적어주세요.');
+            }
+
+            // 4. 검증 섹션
+            if (!sectionHasContent('검증')) {
+              issues.push('`검증` 섹션이 비어 있습니다. 자동 테스트, 수동 검증 시나리오, 또는 생략 사유를 적어주세요.');
+            }
+
+            // 5. 영향도 요약
+            const impact = oneLine('영향도 요약');
+            if (!impact) {
+              issues.push('`영향도 요약` 한 줄이 비어 있습니다. (해당 없음 / 있음(아래 체크 항목 참고))');
+            }
+
+            const marker = '<!-- pr-body-check -->';
+            const headLine = '👋 **PR 본문 보완 요청**';
+
+            // Find previous bot comment to update (paginate to survive 100+ comment threads)
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+
+            if (issues.length === 0) {
+              if (existing) {
+                // Replace with passing message so reviewer sees it cleared
+                const okBody = `${marker}\n✅ PR 본문이 보강되었습니다. 리뷰를 진행해주세요.`;
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existing.id,
+                  body: okBody,
+                });
+              }
+              return;
+            }
+
+            const body_text = [
+              marker,
+              headLine,
+              '',
+              '아래 항목이 비어 있거나 누락되었습니다. **이건 머지 차단이 아니라 보완 요청** 입니다. 리뷰어가 GitHub PR 화면 하나만으로 코드를 리뷰할 수 있도록 본문을 보강해주세요.',
+              '',
+              ...issues.map(i => `- ${i}`),
+              '',
+              '자세한 가이드는 PR 템플릿 안내문과 `.github/CODE_REVIEW.md` 를 참고해주세요.',
+            ].join('\n');
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: body_text,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body: body_text,
+              });
+            }
