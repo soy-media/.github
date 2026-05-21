@@ -6,6 +6,7 @@ on:
 
 permissions:
   pull-requests: write
+  issues: write
 
 jobs:
   body-check:
@@ -27,27 +28,38 @@ jobs:
               return m ? m[1].trim() : null;
             };
 
-            // Helper: check if a section under "## 이름" has any non-placeholder bullet
+            // Helper: check if a section under "## 이름" has any non-placeholder content.
+            // Accepts both bullet lines (- / *) and plain-text paragraphs.
             const sectionHasContent = (heading) => {
               const re = new RegExp(`##\\s*${heading}[\\s\\S]*?(?=\\n##\\s|\\n---|$)`);
               const m = body.match(re);
               if (!m) return false;
-              const section = m[0].replace(/<!--[\s\S]*?-->/g, '');
-              // Look for non-empty bullets that aren't just placeholders
-              const bullets = section.split('\n').filter(l => /^\s*[-*]\s+\S/.test(l));
-              return bullets.some(b => {
-                const value = b.replace(/^\s*[-*]\s+/, '').trim();
-                if (!value || value === '-' || value === '없음') return false;
-                // Skip template default placeholders like "- [ ]" with no text
-                if (/^\[\s\]\s*$/.test(value)) return false;
+              const lines = m[0]
+                .replace(/<!--[\s\S]*?-->/g, '')
+                .split('\n')
+                .slice(1) // drop heading
+                .map(l => l.trim())
+                .filter(Boolean);
+              return lines.some(line => {
+                // Strip bullet/checkbox prefixes if present
+                const value = line
+                  .replace(/^[-*]\s+/, '')
+                  .replace(/^\[\s\]\s*/, '')
+                  .trim();
+                if (!value) return false;
+                if (value === '-' || value === '없음') return false;
+                // Label-only placeholder like "요약:" or "동작 변화 / 기대 동작:"
+                if (/^[^\n:]+:\s*$/.test(value)) return false;
                 return true;
               });
             };
 
-            // 1. Issue link present (Closes/Fixes/Resolves #N, or org/repo#N)
+            // 1. Issue link present, OR `Issue:` line explicitly states 없음(사유).
             const hasIssueLink = /(closes?|fixes?|resolves?)\s+([\w./-]+)?#\d+/i.test(body);
-            if (!hasIssueLink) {
-              issues.push('관련 Issue 링크가 없습니다. `Issue: Closes #N` 형식으로 적어주세요. (관련 이슈가 정말 없으면 그 이유를 본문에 한 줄 적어주세요)');
+            const issueLine = oneLine('Issue');
+            const hasNoIssueReason = !!issueLine && /없음\s*\(.+\)/.test(issueLine);
+            if (!hasIssueLink && !hasNoIssueReason) {
+              issues.push('관련 Issue 링크가 없습니다. `Issue: Closes #N` 형식으로 적거나, 관련 이슈가 없다면 `Issue: 없음(사유)` 로 적어주세요.');
             }
 
             // 2. 문제 / 목표 한 줄
@@ -75,8 +87,8 @@ jobs:
             const marker = '<!-- pr-body-check -->';
             const headLine = '👋 **PR 본문 보완 요청**';
 
-            // Find previous bot comment to update or delete
-            const { data: comments } = await github.rest.issues.listComments({
+            // Find previous bot comment to update (paginate to survive 100+ comment threads)
+            const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.pull_request.number,
